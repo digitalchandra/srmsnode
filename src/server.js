@@ -10,9 +10,14 @@ const helmet = require("helmet");
 require("dotenv").config();
 
 const connectDB = require("./config/database");
+
 const authRoutes = require("./routes/authRoutes");
+
 const categoryRoutes = require("./routes/categoryRoutes");
+
 const brandRoutes = require("./routes/brandRoutes");
+
+const productRoutes = require("./routes/productRoutes");
 
 const app = express();
 
@@ -41,6 +46,8 @@ app.use("/api/auth", authRoutes);
 app.use("/api/categories", categoryRoutes);
 
 app.use("/api/brands", brandRoutes);
+
+app.use("/api/products", productRoutes);
 // Health Check
 // --------------------
 app.get("/api/health", (req, res) => {
