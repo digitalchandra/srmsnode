@@ -21,7 +21,7 @@ const PORT = process.env.PORT || 5050;
 // Middleware
 // --------------------
 app.use(helmet());
-app.use("/api/categories", categoryRoutes);
+
 
 app.use(
   cors({
@@ -36,6 +36,7 @@ app.use(express.urlencoded({ extended: true }));
 // -------Route -------------
 
 app.use("/api/auth", authRoutes);
+app.use("/api/categories", categoryRoutes);
 // Health Check
 // --------------------
 app.get("/api/health", (req, res) => {
