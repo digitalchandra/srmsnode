@@ -19,6 +19,8 @@ const brandRoutes = require("./routes/brandRoutes");
 
 const productRoutes = require("./routes/productRoutes");
 
+const inventoryBatchRoutes = require("./routes/inventoryBatchRoutes");
+
 const app = express();
 
 const PORT = process.env.PORT || 5050;
@@ -48,6 +50,8 @@ app.use("/api/categories", categoryRoutes);
 app.use("/api/brands", brandRoutes);
 
 app.use("/api/products", productRoutes);
+
+app.use("/api/inventory-batches", inventoryBatchRoutes);
 // Health Check
 // --------------------
 app.get("/api/health", (req, res) => {
