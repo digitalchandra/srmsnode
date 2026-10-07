@@ -21,6 +21,8 @@ const productRoutes = require("./routes/productRoutes");
 
 const inventoryBatchRoutes = require("./routes/inventoryBatchRoutes");
 
+const stockAdjustmentRoutes = require("./routes/stockAdjustmentRoutes");
+
 const app = express();
 
 const PORT = process.env.PORT || 5050;
@@ -52,6 +54,8 @@ app.use("/api/brands", brandRoutes);
 app.use("/api/products", productRoutes);
 
 app.use("/api/inventory-batches", inventoryBatchRoutes);
+
+app.use("/api/stock-adjustments",stockAdjustmentRoutes);
 // Health Check
 // --------------------
 app.get("/api/health", (req, res) => {

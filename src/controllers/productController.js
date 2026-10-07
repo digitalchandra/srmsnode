@@ -132,6 +132,69 @@ const createProduct = async (req, res) => {
   }
 };
 
+const getLowStockProducts = async (req, res) => {
+  try {
+    const tenantId = req.user.tenantId;
+
+    const products = await Product.find({
+      tenantId,
+      status: "ACTIVE",
+      "inventory.trackStock": true,
+      $expr: {
+        $lte: [
+          "$inventory.currentStock",
+          "$inventory.lowStockThreshold",
+        ],
+      },
+    })
+      .populate("categoryId", "name")
+      .populate("brandId", "name")
+      .sort({
+        "inventory.currentStock": 1,
+      });
+
+    return res.status(200).json({
+      success: true,
+      count: products.length,
+      data: products,
+    });
+  } catch (error) {
+    console.error("Get low stock products error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Failed to fetch low stock products",
+    });
+  }
+};
+const getProducts = async (req, res) => {
+  try {
+    const tenantId = req.user.tenantId;
+
+    const products = await Product.find({
+      tenantId,
+    })
+      .populate("categoryId", "name")
+      .populate("brandId", "name")
+      .sort({ createdAt: -1 });
+
+    return res.status(200).json({
+      success: true,
+      count: products.length,
+      data: products,
+    });
+  } catch (error) {
+    console.error("Get products error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Failed to fetch products",
+    });
+  }
+};
+
 module.exports = {
   createProduct,
+  getProducts,
+  getLowStockProducts,
 };

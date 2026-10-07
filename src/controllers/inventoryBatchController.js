@@ -187,8 +187,83 @@ const getInventoryBatch = async (req, res) => {
   }
 };
 
+const getExpiryBatches = async (req, res) => {
+  try {
+    const tenantId = req.user.tenantId;
+
+    const days = Number(req.query.days) || 30;
+
+    if (days < 1 || days > 365) {
+      return res.status(400).json({
+        success: false,
+        message: "Days must be between 1 and 365",
+      });
+    }
+
+    const now = new Date();
+
+    const futureDate = new Date(now);
+    futureDate.setDate(futureDate.getDate() + days);
+
+    const batches = await InventoryBatch.find({
+      tenantId,
+      status: "ACTIVE",
+      expiryDate: {
+        $ne: null,
+        $lte: futureDate,
+      },
+    })
+      .populate("productId", "name sku barcode unit")
+      .sort({ expiryDate: 1 });
+
+    const data = batches.map((batch) => {
+      const expiryDate = new Date(batch.expiryDate);
+
+      const differenceMs = expiryDate.getTime() - now.getTime();
+      const daysRemaining = Math.ceil(
+        differenceMs / (1000 * 60 * 60 * 24)
+      );
+
+      let expiryStatus;
+
+      if (daysRemaining < 0) {
+        expiryStatus = "EXPIRED";
+      } else if (daysRemaining <= 7) {
+        expiryStatus = "CRITICAL";
+      } else {
+        expiryStatus = "EXPIRING_SOON";
+      }
+
+      return {
+        _id: batch._id,
+        product: batch.productId,
+        batchNumber: batch.batchNumber,
+        quantity: batch.quantity,
+        expiryDate: batch.expiryDate,
+        daysRemaining,
+        expiryStatus,
+      };
+    });
+
+    return res.status(200).json({
+      success: true,
+      count: data.length,
+      days,
+      data,
+    });
+  } catch (error) {
+    console.error("Get expiry batches error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Failed to fetch expiry batches",
+    });
+  }
+};
+
 module.exports = {
   createInventoryBatch,
   getInventoryBatches,
   getInventoryBatch,
+  getExpiryBatches,
 };
