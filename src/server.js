@@ -27,6 +27,10 @@ const stockMovementRoutes = require("./routes/stockMovementRoutes");
 
 const supplierRoutes = require("./routes/supplierRoutes");
 
+const purchaseRoutes = require("./routes/purchaseRoutes");
+
+const purchaseItemRoutes = require("./routes/purchaseItemRoutes");
+
 const app = express();
 
 const PORT = process.env.PORT || 5050;
@@ -63,6 +67,10 @@ app.use("/api/stock-adjustments",stockAdjustmentRoutes);
 app.use("/api/stock-movements",stockMovementRoutes);
 
 app.use("/api/suppliers", supplierRoutes);
+
+app.use("/api/purchases", purchaseRoutes);
+
+app.use("/api/purchases", purchaseItemRoutes);
 
 
 // -----------Health Check---------
