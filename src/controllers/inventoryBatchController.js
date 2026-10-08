@@ -1,7 +1,11 @@
+const mongoose = require("mongoose");
 const InventoryBatch = require("../models/InventoryBatch");
 const Product = require("../models/Product");
+const StockMovement = require("../models/StockMovement");
 
 const createInventoryBatch = async (req, res) => {
+  const session = await mongoose.startSession();
+
   try {
     const {
       productId,
@@ -14,7 +18,6 @@ const createInventoryBatch = async (req, res) => {
 
     const tenantId = req.user.tenantId;
 
-    // Required fields
     if (
       !productId ||
       !batchNumber ||
@@ -28,7 +31,6 @@ const createInventoryBatch = async (req, res) => {
       });
     }
 
-    // Validate quantity
     if (quantity <= 0) {
       return res.status(400).json({
         success: false,
@@ -36,7 +38,6 @@ const createInventoryBatch = async (req, res) => {
       });
     }
 
-    // Validate cost price
     if (costPrice < 0) {
       return res.status(400).json({
         success: false,
@@ -44,28 +45,6 @@ const createInventoryBatch = async (req, res) => {
       });
     }
 
-    // Find product belonging to current tenant
-    const product = await Product.findOne({
-      _id: productId,
-      tenantId,
-    });
-
-    if (!product) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid product",
-      });
-    }
-
-    // Check stock tracking
-    if (!product.inventory.trackStock) {
-      return res.status(400).json({
-        success: false,
-        message: "Stock tracking is disabled for this product",
-      });
-    }
-
-    // Expiry validation
     if (expiryDate && new Date(expiryDate) <= new Date()) {
       return res.status(400).json({
         success: false,
@@ -73,30 +52,83 @@ const createInventoryBatch = async (req, res) => {
       });
     }
 
-    // If expiry tracking is enabled, expiry date is required
+    session.startTransaction();
+
+    const product = await Product.findOne({
+      _id: productId,
+      tenantId,
+    }).session(session);
+
+    if (!product) {
+      await session.abortTransaction();
+
+      return res.status(400).json({
+        success: false,
+        message: "Invalid product",
+      });
+    }
+
+    if (!product.inventory.trackStock) {
+      await session.abortTransaction();
+
+      return res.status(400).json({
+        success: false,
+        message: "Stock tracking is disabled for this product",
+      });
+    }
+
     if (product.expiryTracking.enabled && !expiryDate) {
+      await session.abortTransaction();
+
       return res.status(400).json({
         success: false,
         message: "Expiry date is required for this product",
       });
     }
 
-    // Create inventory batch
-    const batch = await InventoryBatch.create({
-      tenantId,
-      productId,
-      batchNumber: batchNumber.trim(),
-      quantity,
-      costPrice,
-      manufacturedDate: manufacturedDate || null,
-      expiryDate: expiryDate || null,
-      status: "ACTIVE",
-    });
+    const previousStock = product.inventory.currentStock;
+    const newStock = previousStock + quantity;
 
-    // Increase product stock
-    product.inventory.currentStock += quantity;
+    const [batch] = await InventoryBatch.create(
+      [
+        {
+          tenantId,
+          productId,
+          batchNumber: batchNumber.trim(),
+          quantity,
+          costPrice,
+          manufacturedDate: manufacturedDate || null,
+          expiryDate: expiryDate || null,
+          status: "ACTIVE",
+        },
+      ],
+      { session }
+    );
 
-    await product.save();
+    product.inventory.currentStock = newStock;
+
+    await product.save({ session });
+
+    await StockMovement.create(
+      [
+        {
+          tenantId,
+          productId,
+          batchId: batch._id,
+          movementType: "STOCK_IN",
+          quantity,
+          previousStock,
+          newStock,
+          referenceType: "PURCHASE",
+          referenceId: null,
+          note: `Stock added through batch ${batch.batchNumber}`,
+          performedBy: req.user.userId,
+        },
+      ],
+      { session }
+    );
+
+    await session.commitTransaction();
 
     return res.status(201).json({
       success: true,
@@ -104,14 +136,15 @@ const createInventoryBatch = async (req, res) => {
       data: {
         batch,
         stock: {
-          previousStock: product.inventory.currentStock - quantity,
+          previousStock,
           addedQuantity: quantity,
-          currentStock: product.inventory.currentStock,
+          currentStock: newStock,
         },
       },
     });
   } catch (error) {
-    // Duplicate batch
+    await session.abortTransaction();
+
     if (error.code === 11000) {
       return res.status(409).json({
         success: false,
@@ -125,6 +158,8 @@ const createInventoryBatch = async (req, res) => {
       success: false,
       message: "Failed to create inventory batch",
     });
+  } finally {
+    await session.endSession();
   }
 };
 

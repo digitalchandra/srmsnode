@@ -2,6 +2,8 @@ const express = require("express");
 
 const authMiddleware = require("../middleware/authMiddleware");
 
+const StockMovement = require("../models/StockMovement");
+
 const {
   createStockAdjustment,
   getStockAdjustments

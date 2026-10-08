@@ -23,13 +23,14 @@ const inventoryBatchRoutes = require("./routes/inventoryBatchRoutes");
 
 const stockAdjustmentRoutes = require("./routes/stockAdjustmentRoutes");
 
+const stockMovementRoutes = require("./routes/stockMovementRoutes");
+
 const app = express();
 
 const PORT = process.env.PORT || 5050;
 
-// --------------------
-// Middleware
-// --------------------
+
+// ---------Middleware-----------
 app.use(helmet());
 
 
@@ -56,8 +57,11 @@ app.use("/api/products", productRoutes);
 app.use("/api/inventory-batches", inventoryBatchRoutes);
 
 app.use("/api/stock-adjustments",stockAdjustmentRoutes);
-// Health Check
-// --------------------
+
+app.use("/api/stock-movements",stockMovementRoutes);
+
+
+// -----------Health Check---------
 app.get("/api/health", (req, res) => {
   res.status(200).json({
     success: true,
@@ -66,9 +70,8 @@ app.get("/api/health", (req, res) => {
   });
 });
 
-// --------------------
-// 404
-// --------------------
+
+// ---404-----------------
 app.use((req, res) => {
   res.status(404).json({
     success: false,
@@ -76,9 +79,8 @@ app.use((req, res) => {
   });
 });
 
-// --------------------
-// Start Application
-// --------------------
+ 
+// -------Start Application-------------
 const startServer = async () => {
   try {
     await connectDB();
