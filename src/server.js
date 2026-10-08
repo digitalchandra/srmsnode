@@ -25,6 +25,8 @@ const stockAdjustmentRoutes = require("./routes/stockAdjustmentRoutes");
 
 const stockMovementRoutes = require("./routes/stockMovementRoutes");
 
+const supplierRoutes = require("./routes/supplierRoutes");
+
 const app = express();
 
 const PORT = process.env.PORT || 5050;
@@ -59,6 +61,8 @@ app.use("/api/inventory-batches", inventoryBatchRoutes);
 app.use("/api/stock-adjustments",stockAdjustmentRoutes);
 
 app.use("/api/stock-movements",stockMovementRoutes);
+
+app.use("/api/suppliers", supplierRoutes);
 
 
 // -----------Health Check---------
