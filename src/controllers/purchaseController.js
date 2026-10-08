@@ -350,6 +350,138 @@ const receivePurchase = async (req, res) => {
     await session.endSession();
   }
 };
+//update purchase status to cancelled
+const updatePurchase = async (req, res) => {
+  try {
+    const tenantId = req.user.tenantId;
+    const { id } = req.params;
+
+    const {
+      supplierId,
+      invoiceNumber,
+      purchaseDate,
+      taxAmount,
+      discountAmount,
+      note,
+    } = req.body;
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid purchase ID",
+      });
+    }
+
+    const purchase = await Purchase.findOne({
+      _id: id,
+      tenantId,
+    });
+
+    if (!purchase) {
+      return res.status(404).json({
+        success: false,
+        message: "Purchase not found",
+      });
+    }
+
+    // Only DRAFT purchases can be updated
+    if (purchase.status !== "DRAFT") {
+      return res.status(400).json({
+        success: false,
+        message: "Only draft purchases can be updated",
+      });
+    }
+
+    // Update supplier if provided
+    if (supplierId !== undefined) {
+      if (!mongoose.Types.ObjectId.isValid(supplierId)) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid supplier ID",
+        });
+      }
+
+      const supplier = await Supplier.findOne({
+        _id: supplierId,
+        tenantId,
+        status: "ACTIVE",
+      });
+
+      if (!supplier) {
+        return res.status(404).json({
+          success: false,
+          message: "Active supplier not found",
+        });
+      }
+
+      purchase.supplierId = supplierId;
+    }
+
+    if (invoiceNumber !== undefined) {
+      purchase.invoiceNumber = invoiceNumber;
+    }
+
+    if (purchaseDate !== undefined) {
+      purchase.purchaseDate = purchaseDate;
+    }
+
+    if (taxAmount !== undefined) {
+      if (taxAmount < 0) {
+        return res.status(400).json({
+          success: false,
+          message: "Tax amount cannot be negative",
+        });
+      }
+
+      purchase.taxAmount = taxAmount;
+    }
+
+    if (discountAmount !== undefined) {
+      if (discountAmount < 0) {
+        return res.status(400).json({
+          success: false,
+          message: "Discount amount cannot be negative",
+        });
+      }
+
+      purchase.discountAmount = discountAmount;
+    }
+
+    if (note !== undefined) {
+      purchase.note = note;
+    }
+
+    const totalAmount =
+      Number(purchase.subtotal || 0) +
+      Number(purchase.taxAmount || 0) -
+      Number(purchase.discountAmount || 0);
+
+    if (totalAmount < 0) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Discount cannot be greater than subtotal plus tax",
+      });
+    }
+
+    purchase.totalAmount = totalAmount;
+
+    await purchase.save();
+
+    return res.status(200).json({
+      success: true,
+      message: "Purchase updated successfully",
+      data: purchase,
+    });
+  } catch (error) {
+    console.error("Update purchase error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Failed to update purchase",
+    });
+  }
+};
 
 //cancle purchase
 
@@ -419,6 +551,7 @@ module.exports = {
     createPurchase,
     getPurchase,
     getPurchases,
+    updatePurchase,
     receivePurchase,
     cancelPurchase,
 };

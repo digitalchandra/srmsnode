@@ -5,6 +5,7 @@ const {
   createPurchase,
     getPurchase,
     getPurchases,
+    updatePurchase,
     receivePurchase,    
     cancelPurchase,
 } = require("../controllers/purchaseController");
@@ -17,6 +18,9 @@ router.use(authMiddleware);
 router.post("/", createPurchase);
 
 router.get("/", getPurchases);
+
+//update purchase
+router.put("/:id", updatePurchase);
 
 // Receive purchase and create inventory batches
 router.post("/:id/receive", receivePurchase);
