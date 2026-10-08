@@ -33,6 +33,8 @@ const purchaseItemRoutes = require("./routes/purchaseItemRoutes");
 
 const customerRoutes = require("./routes/customerRoutes");
 
+const saleRoutes = require("./routes/saleRoutes");
+
 const app = express();
 
 const PORT = process.env.PORT || 5050;
@@ -75,6 +77,8 @@ app.use("/api/purchases", purchaseRoutes);
 app.use("/api/purchases", purchaseItemRoutes);
 
 app.use("/api/customers", customerRoutes);
+
+app.use("/api/sales", saleRoutes);
 
 
 // -----------Health Check---------
