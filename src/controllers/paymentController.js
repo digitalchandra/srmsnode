@@ -3,6 +3,8 @@ const mongoose = require("mongoose");
 const Payment = require("../models/Payment");
 const Sale = require("../models/Sale");
 
+// Create a new payment for a sale
+
 const createPayment = async (req, res) => {
   const { saleId } = req.params;
   const {
@@ -87,15 +89,44 @@ const createPayment = async (req, res) => {
         error.statusCode = 400;
         throw error;
       }
+      
 
       const totalAmount = Number(sale.totalAmount);
       const currentPaid = Number(sale.paidAmount || 0);
+
+            if (
+            !Number.isFinite(currentPaid) ||
+            currentPaid < 0 ||
+            currentPaid > totalAmount
+            ) {
+            const error = new Error(
+                "Sale payment totals are invalid"
+            );
+            error.statusCode = 400;
+            throw error;
+            }
+
 
       // Work in yen using two decimal places for safe comparisons.
       const totalCents = Math.round(totalAmount * 100);
       const paidCents = Math.round(currentPaid * 100);
       const amountCents = Math.round(paymentAmount * 100);
       const balanceCents = totalCents - paidCents;
+
+      //-------------------------
+
+              if (
+        !Number.isSafeInteger(amountCents) ||
+        amountCents <= 0
+        ) {
+        const error = new Error(
+            "Payment amount is too small or invalid"
+        );
+        error.statusCode = 400;
+        throw error;
+        }
+
+    
 
       if (
         !Number.isFinite(totalAmount) ||
@@ -191,6 +222,8 @@ const createPayment = async (req, res) => {
   }
 };
 
+// Get payment history for a sale
+
 const getSalePayments = async (req, res) => {
   const { saleId } = req.params;
 
@@ -217,7 +250,6 @@ const getSalePayments = async (req, res) => {
     const payments = await Payment.find({
       tenantId: req.user.tenantId,
       saleId,
-      status: "COMPLETED",
     }).sort({ paymentDate: -1, createdAt: -1 });
 
     return res.status(200).json({
@@ -238,7 +270,173 @@ const getSalePayments = async (req, res) => {
   }
 };
 
+
+const voidPayment = async (req, res) => {
+  const { paymentId } = req.params;
+
+  if (!mongoose.isValidObjectId(paymentId)) {
+    return res.status(400).json({
+      success: false,
+      message: "Invalid payment ID",
+    });
+  }
+
+  const session = await mongoose.startSession();
+
+  try {
+    let result;
+
+    await session.withTransaction(async () => {
+      const payment = await Payment.findOne({
+        _id: paymentId,
+        tenantId: req.user.tenantId,
+        status: "COMPLETED",
+      }).session(session);
+
+      if (!payment) {
+        const error = new Error(
+          "Completed payment not found"
+        );
+        error.statusCode = 404;
+        throw error;
+      }
+
+      const sale = await Sale.findOne({
+        _id: payment.saleId,
+        tenantId: req.user.tenantId,
+      }).session(session);
+
+      if (!sale) {
+        const error = new Error("Sale not found");
+        error.statusCode = 404;
+        throw error;
+      }
+
+      if (sale.status !== "COMPLETED") {
+        const error = new Error(
+          "Only completed sales can have payments voided"
+        );
+        error.statusCode = 400;
+        throw error;
+      }
+
+      const updatedPayment = await Payment.findOneAndUpdate(
+        {
+          _id: paymentId,
+          tenantId: req.user.tenantId,
+          status: "COMPLETED",
+        },
+        {
+          $set: {
+            status: "VOIDED",
+          },
+        },
+        {
+          new: true,
+          session,
+          runValidators: true,
+        }
+      );
+
+      if (!updatedPayment) {
+        throw new Error(
+          "Payment changed during this operation; please retry"
+        );
+      }
+
+      const remainingPayments = await Payment.find({
+        tenantId: req.user.tenantId,
+        saleId: payment.saleId,
+        status: "COMPLETED",
+      })
+        .select("amount")
+        .session(session);
+
+      const totalPaid = Math.round(
+        remainingPayments.reduce(
+          (sum, item) => sum + Math.round(item.amount * 100),
+          0
+        )
+      ) / 100;
+
+      const totalAmount = Number(sale.totalAmount);
+
+      if (
+        !Number.isFinite(totalAmount) ||
+        totalAmount < 0 ||
+        totalPaid > totalAmount
+      ) {
+        throw new Error(
+          "Payment totals are inconsistent; transaction cancelled"
+        );
+      }
+
+      let paymentStatus = "UNPAID";
+
+      if (totalPaid > 0 && totalPaid < totalAmount) {
+        paymentStatus = "PARTIAL";
+      } else if (totalPaid >= totalAmount && totalAmount > 0) {
+        paymentStatus = "PAID";
+      }
+
+      const updatedSale = await Sale.findOneAndUpdate(
+        {
+          _id: sale._id,
+          tenantId: req.user.tenantId,
+          paidAmount: sale.paidAmount,
+          status: "COMPLETED",
+        },
+        {
+          $set: {
+            paidAmount: totalPaid,
+            paymentStatus,
+          },
+        },
+        {
+          new: true,
+          session,
+          runValidators: true,
+        }
+      );
+
+      if (!updatedSale) {
+        throw new Error(
+          "Sale changed during this operation; please retry"
+        );
+      }
+
+      result = {
+        payment: updatedPayment,
+        sale: updatedSale,
+        balanceDue: Math.round(
+          (totalAmount - totalPaid) * 100
+        ) / 100,
+      };
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: "Payment voided and sale totals recalculated",
+      data: result,
+    });
+  } catch (error) {
+    console.error("Void payment error:", error);
+
+    return res.status(error.statusCode || 500).json({
+      success: false,
+      message: error.statusCode
+        ? error.message
+        : "Failed to void payment",
+    });
+  } finally {
+    await session.endSession();
+  }
+};
+
+
 module.exports = {
   createPayment,
   getSalePayments,
+  voidPayment,
+    
 };
