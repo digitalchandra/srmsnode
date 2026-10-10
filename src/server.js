@@ -39,6 +39,8 @@ const saleItemRoutes = require("./routes/saleItemRoutes");
 
 const paymentRoutes = require("./routes/paymentRoutes");
 
+const salesReturnRoutes = require("./routes/salesReturnRoutes");
+
 const app = express();
 
 const PORT = process.env.PORT || 5050;
@@ -87,6 +89,8 @@ app.use("/api/sales", saleRoutes);
 app.use("/api/sales", saleItemRoutes);
 
 app.use("/api/payments", paymentRoutes);
+
+app.use("/api/sales-returns", salesReturnRoutes);
 
 
 // -----------Health Check---------
