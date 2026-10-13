@@ -3,6 +3,7 @@ const mongoose = require("mongoose");
 const Sale = require("../models/Sale");
 const SaleItem = require("../models/SaleItem");
 const Product = require("../models/Product");
+const SaleItemBatch = require("../models/SaleItemBatch");
 
 const addSaleItem = async (req, res) => {
   try {
@@ -522,10 +523,55 @@ const deleteSaleItem = async (req, res) => {
 };
 
 
+const getSaleItemBatchAllocations = async (req, res) => {
+  try {
+    const { saleId } = req.params;
+    const tenantId = req.user.tenantId;
+
+    const sale = await Sale.findOne({
+      _id: saleId,
+      tenantId,
+      status: "COMPLETED",
+    });
+
+    if (!sale) {
+      return res.status(404).json({
+        success: false,
+        message: "Completed sale not found",
+      });
+    }
+
+    const allocations = await SaleItemBatch.find({
+      tenantId,
+      saleId: sale._id,
+    })
+      .populate("batchId", "batchNumber")
+      .populate("saleItemId", "quantity")
+      .sort({ createdAt: 1 });
+
+    return res.status(200).json({
+      success: true,
+      count: allocations.length,
+      data: allocations,
+    });
+  } catch (error) {
+    console.error("Get sale batch allocations error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Failed to fetch sale batch allocations",
+    });
+  }
+};
+
+
+
+
 module.exports = {
     addSaleItem,
     getSaleItems,
     getSale,
     updateSaleItem,
     deleteSaleItem,
-}; 
+    getSaleItemBatchAllocations,
+};

@@ -8,6 +8,7 @@ const InventoryBatch = require("../models/InventoryBatch");
 const Product = require("../models/Product");
 const StockMovement = require("../models/StockMovement");
 const SaleItemBatch = require("../models/SaleItemBatch");
+const SalesReturnItemBatch = require("../models/SalesReturnItemBatch");
 
 const createSalesReturn = async (req, res) => {
   try {
@@ -394,129 +395,182 @@ const processSalesReturn = async (req, res) => {
           throw error;
         }
 
-        // Subtract quantities already returned to each original batch.
-        const priorCompletedReturns = await SalesReturn.find({
-          tenantId,
-          saleId: salesReturn.saleId,
-          status: "COMPLETED",
-          _id: { $ne: salesReturn._id },
-        })
-          .select("_id")
-          .session(session);
+// Find previously completed returns for this sale.
+      const priorCompletedReturns = await SalesReturn.find({
+        tenantId,
+        saleId: salesReturn.saleId,
+        status: "COMPLETED",
+        _id: { $ne: salesReturn._id },
+      })
+        .select("_id")
+        .session(session);
 
-        const priorReturnIds = priorCompletedReturns.map(
-          (record) => record._id
+      const priorReturnIds = priorCompletedReturns.map(
+        (record) => record._id
+      );
+
+      // Read previous return items, including records created before
+      // SalesReturnItemBatch was introduced.
+      const priorReturnItems = priorReturnIds.length
+        ? await SalesReturnItem.find({
+            tenantId,
+            salesReturnId: { $in: priorReturnIds },
+            saleItemId: item.saleItemId,
+            restock: true,
+          }).session(session)
+        : [];
+
+      // Read batch-level allocations from previously processed returns.
+      const priorBatchAllocations = priorReturnIds.length
+        ? await SalesReturnItemBatch.find({
+            tenantId,
+            salesReturnId: { $in: priorReturnIds },
+            saleItemId: item.saleItemId,
+          }).session(session)
+        : [];
+
+      // Identify return items that already have detailed batch allocations.
+      // Their quantities must not also be counted from the legacy field.
+      const allocationBackedItemIds = new Set(
+        priorBatchAllocations.map(
+          (allocation) => allocation.salesReturnItemId.toString()
+        )
+      );
+
+      const legacyReturnItems = priorReturnItems.filter(
+        (record) => !allocationBackedItemIds.has(record._id.toString())
+      );
+
+      let quantityToAllocate = Number(item.quantity);
+      const allocatedBatchIds = [];
+
+      for (const allocation of soldBatchAllocations) {
+        if (quantityToAllocate <= 0.000001) break;
+
+        const allocatedPreviously = priorBatchAllocations
+          .filter(
+            (record) =>
+              record.inventoryBatchId.toString() ===
+              allocation.batchId.toString()
+          )
+          .reduce((sum, record) => sum + Number(record.quantity), 0);
+
+        // Compatibility with returns processed before batch-level records existed.
+        const returnedPreviouslyLegacy = legacyReturnItems
+          .filter(
+            (record) =>
+              record.inventoryBatchId &&
+              record.inventoryBatchId.toString() ===
+                allocation.batchId.toString()
+          )
+          .reduce((sum, record) => sum + Number(record.quantity), 0);
+
+        const remainingFromBatch = Math.max(
+          0,
+          Number(allocation.quantity) -
+            allocatedPreviously -
+            returnedPreviouslyLegacy
         );
 
-        const priorReturnItems = priorReturnIds.length
-          ? await SalesReturnItem.find({
-              tenantId,
-              salesReturnId: { $in: priorReturnIds },
-              saleItemId: item.saleItemId,
-              restock: true,
-            }).session(session)
-          : [];
+        const quantity = Math.min(
+          quantityToAllocate,
+          remainingFromBatch
+        );
 
-        let quantityToAllocate = Number(item.quantity);
+        if (quantity <= 0.000001) continue;
 
-        for (const allocation of soldBatchAllocations) {
-          if (quantityToAllocate <= 0.000001) break;
+        const batch = await InventoryBatch.findOne({
+          _id: allocation.batchId,
+          tenantId,
+          productId: item.productId,
+        }).session(session);
 
-          const alreadyReturnedToBatch = priorReturnItems
-            .filter(
-              (record) =>
-                record.inventoryBatchId &&
-                record.inventoryBatchId.toString() ===
-                  allocation.batchId.toString()
-            )
-            .reduce((sum, record) => sum + Number(record.quantity), 0);
-
-          const remainingFromBatch = Math.max(
-            0,
-            Number(allocation.quantity) - alreadyReturnedToBatch
-          );
-
-          const quantity = Math.min(
-            quantityToAllocate,
-            remainingFromBatch
-          );
-
-          if (quantity <= 0) continue;
-
-          const batch = await InventoryBatch.findOne({
-            _id: allocation.batchId,
-            tenantId,
-            productId: item.productId,
-          }).session(session);
-
-          if (!batch) {
-            const error = new Error(
-              "Original inventory batch not found"
-            );
-            error.statusCode = 400;
-            throw error;
-          }
-
-          const product = await Product.findOne({
-            _id: item.productId,
-            tenantId,
-          }).session(session);
-
-          if (!product) {
-            const error = new Error("Product not found");
-            error.statusCode = 404;
-            throw error;
-          }
-
-          const previousBatchStock = Number(batch.quantity);
-          const previousProductStock = Number(
-            product.inventory.currentStock
-          );
-
-          batch.quantity = previousBatchStock + quantity;
-          batch.status =
-            batch.expiryDate && batch.expiryDate < new Date()
-              ? "EXPIRED"
-              : "ACTIVE";
-
-          product.inventory.currentStock =
-            previousProductStock + quantity;
-
-          await batch.save({ session });
-          await product.save({ session });
-
-          await StockMovement.create(
-            [
-              {
-                tenantId,
-                productId: item.productId,
-                batchId: batch._id,
-                movementType: "RETURN_IN",
-                quantity,
-                previousStock: previousProductStock,
-                newStock: product.inventory.currentStock,
-                referenceType: "RETURN",
-                referenceId: salesReturn._id,
-                note: `Sales return ${salesReturn.returnNumber}`,
-                performedBy: userId,
-              },
-            ],
-            { session }
-          );
-
-          item.inventoryBatchId = batch._id;
-          await item.save({ session });
-
-          quantityToAllocate -= quantity;
-        }
-
-        if (quantityToAllocate > 0.000001) {
-          const error = new Error(
-            "Return quantity exceeds the quantity allocated to original batches"
-          );
+        if (!batch) {
+          const error = new Error("Original inventory batch not found");
           error.statusCode = 400;
           throw error;
         }
+
+        const product = await Product.findOne({
+          _id: item.productId,
+          tenantId,
+        }).session(session);
+
+        if (!product) {
+          const error = new Error("Product not found");
+          error.statusCode = 404;
+          throw error;
+        }
+
+        const previousBatchStock = Number(batch.quantity);
+        const previousProductStock = Number(
+          product.inventory.currentStock
+        );
+
+        batch.quantity = previousBatchStock + quantity;
+        batch.status =
+          batch.expiryDate && batch.expiryDate < new Date()
+            ? "EXPIRED"
+            : "ACTIVE";
+
+        product.inventory.currentStock = previousProductStock + quantity;
+
+        await batch.save({ session });
+        await product.save({ session });
+
+        await StockMovement.create(
+          [
+            {
+              tenantId,
+              productId: item.productId,
+              batchId: batch._id,
+              movementType: "RETURN_IN",
+              quantity,
+              previousStock: previousProductStock,
+              newStock: product.inventory.currentStock,
+              referenceType: "RETURN",
+              referenceId: salesReturn._id,
+              note: `Sales return ${salesReturn.returnNumber}`,
+              performedBy: userId,
+            },
+          ],
+          { session }
+        );
+
+        // Save the quantity returned to this specific original batch.
+        await SalesReturnItemBatch.create(
+          [
+            {
+              tenantId,
+              salesReturnId: salesReturn._id,
+              salesReturnItemId: item._id,
+              saleItemId: item.saleItemId,
+              productId: item.productId,
+              inventoryBatchId: batch._id,
+              quantity,
+            },
+          ],
+          { session }
+        );
+
+        allocatedBatchIds.push(batch._id);
+        quantityToAllocate -= quantity;
+      }
+
+      if (quantityToAllocate > 0.000001) {
+        const error = new Error(
+          "Return quantity exceeds the quantity allocated to original batches"
+        );
+        error.statusCode = 400;
+        throw error;
+      }
+
+// Keep the old field for compatibility when only one batch was used.
+// Detailed allocations are stored in SalesReturnItemBatch.
+item.inventoryBatchId =
+  allocatedBatchIds.length === 1 ? allocatedBatchIds[0] : null;
+
+await item.save({ session });
       }
 
       salesReturn.status = "COMPLETED";
@@ -530,6 +584,7 @@ const processSalesReturn = async (req, res) => {
         items: returnItems,
       };
     });
+    
 
     return res.status(200).json({
       success: true,
@@ -549,7 +604,51 @@ const processSalesReturn = async (req, res) => {
 };
 
 
+const getSalesReturnBatchAllocations = async (req, res) => {
+  try {
+    const { returnId } = req.params;
+    const tenantId = req.user.tenantId;
+
+    const salesReturn = await SalesReturn.findOne({
+      _id: returnId,
+      tenantId,
+      status: "COMPLETED",
+    });
+
+    if (!salesReturn) {
+      return res.status(404).json({
+        success: false,
+        message: "Completed sales return not found",
+      });
+    }
+
+    const allocations = await SalesReturnItemBatch.find({
+      tenantId,
+      salesReturnId: salesReturn._id,
+    })
+      .populate("inventoryBatchId", "batchNumber quantity")
+      .populate("salesReturnItemId", "quantity condition restock")
+      .sort({ createdAt: 1 });
+
+    return res.status(200).json({
+      success: true,
+      returnNumber: salesReturn.returnNumber,
+      count: allocations.length,
+      data: allocations,
+    });
+  } catch (error) {
+    console.error("Get sales return batch allocations error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Failed to get sales return batch allocations",
+    });
+  }
+};
+
+
 module.exports = {
   createSalesReturn,
     processSalesReturn,
+    getSalesReturnBatchAllocations,
 };
