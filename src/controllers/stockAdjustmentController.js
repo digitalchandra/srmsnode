@@ -2,6 +2,7 @@ const StockAdjustment = require("../models/StockAdjustment");
 const Product = require("../models/Product");
 const InventoryBatch = require("../models/InventoryBatch");
 const StockMovement = require("../models/StockMovement");
+
 const createStockAdjustment = async (req, res) => {
   try {
     const {

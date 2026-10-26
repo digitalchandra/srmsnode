@@ -69,6 +69,14 @@ const saleSchema = new mongoose.Schema(
       default: "UNPAID",
     },
 
+
+    returnRevision: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+
+
     note: {
       type: String,
       trim: true,
@@ -102,5 +110,7 @@ saleSchema.index({
   customerId: 1,
   saleDate: -1,
 });
+
+
 
 module.exports = mongoose.model("Sale", saleSchema);

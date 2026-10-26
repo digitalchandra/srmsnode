@@ -398,8 +398,380 @@ const completeSale = async (req, res) => {
 };
 
 
+const addSaleItem = async (req, res) => {
+  try {
+    const tenantId = req.user.tenantId;
+    const { saleId } = req.params;
+    const { productId, quantity, unitPrice, discountAmount = 0, note = "" } = req.body;
+
+    if (
+      !mongoose.Types.ObjectId.isValid(saleId) ||
+      !mongoose.Types.ObjectId.isValid(productId)
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid sale or product ID",
+      });
+    }
+
+    const qty = Number(quantity);
+    const discount = Number(discountAmount);
+
+    if (!Number.isFinite(qty) || qty <= 0 ||
+        !Number.isFinite(discount) || discount < 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Quantity must be positive and discount cannot be negative",
+      });
+    }
+
+    const sale = await Sale.findOne({ _id: saleId, tenantId });
+
+    if (!sale) {
+      return res.status(404).json({ success: false, message: "Sale not found" });
+    }
+
+    if (sale.status !== "DRAFT") {
+      return res.status(400).json({
+        success: false,
+        message: "Items can only be changed in draft sales",
+      });
+    }
+
+    const product = await Product.findOne({
+      _id: productId,
+      tenantId,
+      status: "ACTIVE",
+    });
+
+    if (!product) {
+      return res.status(404).json({
+        success: false,
+        message: "Active product not found",
+      });
+    }
+
+    const price =
+      unitPrice === undefined || unitPrice === null
+        ? Number(product.pricing?.sellingPrice)
+        : Number(unitPrice);
+
+    if (!Number.isFinite(price) || price < 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid unit price",
+      });
+    }
+
+    const grossTotal = qty * price;
+
+    if (discount > grossTotal) {
+      return res.status(400).json({
+        success: false,
+        message: "Discount cannot exceed item total",
+      });
+    }
+
+    const item = await SaleItem.create({
+      tenantId,
+      saleId: sale._id,
+      productId: product._id,
+      quantity: qty,
+      unitPrice: price,
+      discountAmount: discount,
+      lineTotal: grossTotal - discount,
+      note,
+    });
+
+    const items = await SaleItem.find({ tenantId, saleId: sale._id });
+    sale.subtotal = items.reduce((sum, current) => sum + current.lineTotal, 0);
+    sale.totalAmount = Math.max(
+      0,
+      sale.subtotal + Number(sale.taxAmount || 0) -
+        Number(sale.discountAmount || 0)
+    );
+    await sale.save();
+
+    return res.status(201).json({
+      success: true,
+      message: "Sale item added successfully",
+      data: {
+        item,
+        saleSummary: {
+          subtotal: sale.subtotal,
+          discountAmount: sale.discountAmount,
+          taxAmount: sale.taxAmount,
+          totalAmount: sale.totalAmount,
+        },
+      },
+    });
+  } catch (error) {
+    console.error("Add sale item error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to add sale item",
+    });
+  }
+};
+
+const getSaleItems = async (req, res) => {
+  try {
+    const { tenantId } = req.user;
+    const { saleId } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(saleId)) {
+      return res.status(400).json({ success: false, message: "Invalid sale ID" });
+    }
+
+    const sale = await Sale.findOne({ _id: saleId, tenantId });
+
+    if (!sale) {
+      return res.status(404).json({ success: false, message: "Sale not found" });
+    }
+
+    const items = await SaleItem.find({ tenantId, saleId })
+      .populate("productId", "name sku barcode pricing");
+
+    return res.status(200).json({
+      success: true,
+      data: { sale, items },
+    });
+  } catch (error) {
+    console.error("Get sale items error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to get sale items",
+    });
+  }
+};
+
+const updateSaleItem = async (req, res) => {
+  try {
+    const { tenantId } = req.user;
+    const { saleId, itemId } = req.params;
+    const { quantity, unitPrice, discountAmount, note } = req.body;
+
+    if (
+      !mongoose.Types.ObjectId.isValid(saleId) ||
+      !mongoose.Types.ObjectId.isValid(itemId)
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid sale or item ID",
+      });
+    }
+
+    const sale = await Sale.findOne({ _id: saleId, tenantId });
+
+    if (!sale) {
+      return res.status(404).json({ success: false, message: "Sale not found" });
+    }
+
+    if (sale.status !== "DRAFT") {
+      return res.status(400).json({
+        success: false,
+        message: "Only draft sale items can be updated",
+      });
+    }
+
+    const item = await SaleItem.findOne({ _id: itemId, saleId, tenantId });
+
+    if (!item) {
+      return res.status(404).json({ success: false, message: "Sale item not found" });
+    }
+
+    const qty = quantity === undefined ? item.quantity : Number(quantity);
+    const price = unitPrice === undefined ? item.unitPrice : Number(unitPrice);
+    const discount =
+      discountAmount === undefined ? item.discountAmount : Number(discountAmount);
+
+    if (
+      !Number.isFinite(qty) || qty <= 0 ||
+      !Number.isFinite(price) || price < 0 ||
+      !Number.isFinite(discount) || discount < 0 ||
+      discount > qty * price
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid quantity, price, or discount",
+      });
+    }
+
+    item.quantity = qty;
+    item.unitPrice = price;
+    item.discountAmount = discount;
+    item.lineTotal = qty * price - discount;
+
+    if (note !== undefined) item.note = note;
+
+    await item.save();
+
+    const items = await SaleItem.find({ tenantId, saleId: sale._id });
+    sale.subtotal = items.reduce((sum, current) => sum + current.lineTotal, 0);
+    sale.totalAmount = Math.max(
+      0,
+      sale.subtotal + Number(sale.taxAmount || 0) -
+        Number(sale.discountAmount || 0)
+    );
+    await sale.save();
+
+    return res.status(200).json({
+      success: true,
+      message: "Sale item updated successfully",
+      data: {
+        item,
+        saleSummary: {
+          subtotal: sale.subtotal,
+          discountAmount: sale.discountAmount,
+          taxAmount: sale.taxAmount,
+          totalAmount: sale.totalAmount,
+        },
+      },
+    });
+  } catch (error) {
+    console.error("Update sale item error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to update sale item",
+    });
+  }
+};
+
+const deleteSaleItem = async (req, res) => {
+  try {
+    const { tenantId } = req.user;
+    const { saleId, itemId } = req.params;
+
+    if (
+      !mongoose.Types.ObjectId.isValid(saleId) ||
+      !mongoose.Types.ObjectId.isValid(itemId)
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid sale or item ID",
+      });
+    }
+
+    const sale = await Sale.findOne({ _id: saleId, tenantId });
+
+    if (!sale) {
+      return res.status(404).json({ success: false, message: "Sale not found" });
+    }
+
+    if (sale.status !== "DRAFT") {
+      return res.status(400).json({
+        success: false,
+        message: "Only draft sale items can be deleted",
+      });
+    }
+
+    const item = await SaleItem.findOneAndDelete({
+      _id: itemId,
+      saleId,
+      tenantId,
+    });
+
+    if (!item) {
+      return res.status(404).json({
+        success: false,
+        message: "Sale item not found",
+      });
+    }
+
+    const items = await SaleItem.find({ tenantId, saleId: sale._id });
+    sale.subtotal = items.reduce((sum, current) => sum + current.lineTotal, 0);
+    sale.totalAmount = Math.max(
+      0,
+      sale.subtotal + Number(sale.taxAmount || 0) -
+        Number(sale.discountAmount || 0)
+    );
+    await sale.save();
+
+    return res.status(200).json({
+      success: true,
+      message: "Sale item deleted successfully",
+      data: {
+        saleSummary: {
+          subtotal: sale.subtotal,
+          discountAmount: sale.discountAmount,
+          taxAmount: sale.taxAmount,
+          totalAmount: sale.totalAmount,
+        },
+      },
+    });
+  } catch (error) {
+    console.error("Delete sale item error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to delete sale item",
+    });
+  }
+};
+
+
+const getSales = async (req, res) => {
+  try {
+    const tenantId = req.user.tenantId;
+
+    const page = Math.max(1, Number.parseInt(req.query.page, 10) || 1);
+    const limit = Math.min(
+      100,
+      Math.max(1, Number.parseInt(req.query.limit, 10) || 20)
+    );
+
+    const filter = { tenantId };
+
+    if (req.query.status) {
+      filter.status = req.query.status;
+    }
+
+    if (req.query.paymentStatus) {
+      filter.paymentStatus = req.query.paymentStatus;
+    }
+
+    const [sales, total] = await Promise.all([
+      Sale.find(filter)
+        .populate("customerId", "name phone email")
+        .populate("createdBy", "name email role")
+        .sort({ createdAt: -1, _id: -1 })
+        .skip((page - 1) * limit)
+        .limit(limit)
+        .lean(),
+
+      Sale.countDocuments(filter),
+    ]);
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        sales,
+        pagination: {
+          page,
+          limit,
+          total,
+          totalPages: Math.ceil(total / limit),
+        },
+      },
+    });
+  } catch (error) {
+    console.error("Get sales error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Failed to get sales",
+    });
+  }
+};
+
+
+
 module.exports = {
   createSale,
   completeSale,
   getSale,
+  getSales,
+  addSaleItem,
+  getSaleItems,
+  updateSaleItem,
+  deleteSaleItem,
 };
