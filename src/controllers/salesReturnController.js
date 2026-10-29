@@ -646,9 +646,133 @@ const getSalesReturnBatchAllocations = async (req, res) => {
   }
 };
 
+// List sales returns for the logged-in tenant
+const getSalesReturns = async (req, res) => {
+  try {
+    const tenantId = req.user.tenantId;
+    const page = Math.max(1, Number.parseInt(req.query.page, 10) || 1);
+    const limit = Math.min(
+      100,
+      Math.max(1, Number.parseInt(req.query.limit, 10) || 20)
+    );
+
+    const filter = { tenantId };
+
+    if (req.query.status) {
+      if (!["DRAFT", "COMPLETED", "CANCELLED"].includes(req.query.status)) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid return status",
+        });
+      }
+      filter.status = req.query.status;
+    }
+
+    if (req.query.refundStatus) {
+      if (
+        !["PENDING", "REFUNDED", "STORE_CREDIT", "REJECTED"].includes(
+          req.query.refundStatus
+        )
+      ) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid refund status",
+        });
+      }
+      filter.refundStatus = req.query.refundStatus;
+    }
+
+    const [returns, total] = await Promise.all([
+      SalesReturn.find(filter)
+        .populate("saleId", "saleDate totalAmount paidAmount paymentStatus")
+        .populate("customerId", "name phone")
+        .populate("processedBy", "name email")
+        .sort({ createdAt: -1, _id: -1 })
+        .skip((page - 1) * limit)
+        .limit(limit)
+        .lean(),
+      SalesReturn.countDocuments(filter),
+    ]);
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        returns,
+        pagination: {
+          page,
+          limit,
+          total,
+          totalPages: Math.ceil(total / limit),
+        },
+      },
+    });
+  } catch (error) {
+    console.error("Get sales returns error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to fetch sales returns",
+    });
+  }
+};
+
+// Get one return and its items
+const getSalesReturn = async (req, res) => {
+  try {
+    const { returnId } = req.params;
+    const tenantId = req.user.tenantId;
+
+    if (!mongoose.isValidObjectId(returnId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid sales return ID",
+      });
+    }
+
+    const salesReturn = await SalesReturn.findOne({
+      _id: returnId,
+      tenantId,
+    })
+      .populate("saleId", "saleDate totalAmount paidAmount paymentStatus status")
+      .populate("customerId", "name phone")
+      .populate("processedBy", "name email");
+
+    if (!salesReturn) {
+      return res.status(404).json({
+        success: false,
+        message: "Sales return not found",
+      });
+    }
+
+    const items = await SalesReturnItem.find({
+      tenantId,
+      salesReturnId: salesReturn._id,
+    })
+      .populate("productId", "name sku barcode")
+      .populate("saleItemId", "quantity unitPrice lineTotal")
+      .sort({ createdAt: 1 });
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        salesReturn,
+        items,
+      },
+    });
+  } catch (error) {
+    console.error("Get sales return error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to fetch sales return",
+    });
+  }
+};
+
 
 module.exports = {
-  createSalesReturn,
+    createSalesReturn,
     processSalesReturn,
     getSalesReturnBatchAllocations,
+    getSalesReturns,
+    getSalesReturn,
+
 };
